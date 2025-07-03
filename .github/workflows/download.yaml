@@ -1,0 +1,23 @@
+name: Download Source
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        required: true
+      version:
+        required: false
+        default: 'latest'
+      platform:
+        required: false
+        default: 'pypi'
+
+jobs:
+  download:
+    runs-on: loongarch64-abi1.0
+    steps:
+      - uses: wxpppp/sources@main
+        with:
+          name: ${{ github.event.inputs.name }}
+          version: ${{ github.event.inputs.version }}
+          platform: ${{ github.event.inputs.platform }}
