@@ -14,7 +14,7 @@ on:
 
 jobs:
   download:
-    runs-on: loongarch64-abi1.0
+    runs-on: self-hosted
     steps:
       - uses: wxpppp/sources@main
         with:
