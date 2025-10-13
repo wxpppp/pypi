@@ -96,6 +96,9 @@ jobs:
               if [ "$base" = "README.yaml" ]; then
                 continue
               fi
+              if [ "$base" = "deploy-page.yaml" ]; then
+                continue
+              fi
               link="$REPO_URL/blob/main/.github/workflows/$base"
               echo "| $i | $pkg | [${base}](${link}) |"
               i=$((i+1))
