@@ -1,0 +1,13 @@
+site_name: LoongArch Python Packages CI
+site_url: https://loongson-cloud-community.github.io/pypi/
+theme:
+  name: material
+nav:
+  - 🏡 Home: index.md
+  - 🛠️ User Guide: user-guide.md
+  - ⚙️ CI Details: ci-details.md
+  - 🤝 Contributing: contributing.md
+  - 📚 Package List: package-list.md
+  - ❓ FAQ: faq.md
+  - 📝 Changelog: changelog.md
+
