@@ -1,0 +1,108 @@
+name: build cffi wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+
+jobs:
+  build:
+    name: Build cffi ${{ matrix.platform }} wheel on loongarch64
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+        platform: ["manylinux", "musllinux"]
+    steps:
+      - name: Check if exists
+        run: |
+          pkg=cffi
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          platform="${{ matrix.platform }}"
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls ${url} | grep -q ${pkg}-${version}-.*${platform}.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "${platform} wheels already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "${platform} wheels not found, continue building"
+          fi
+
+          echo "VERSION=${version}" >> $GITHUB_ENV
+
+      - name: Check libffi version
+        if: ${{ env.SKIP != 'true' }}
+        env:
+          HTTPS_PROXY: ${{ secrets.PROXY_URL }}
+        run: |
+         libffi_version=$(curl -sSL https://github.com/python-cffi/cffi/raw/refs/heads/main/.github/workflows/ci.yaml | grep github.com/libffi | grep -oP 'v\d+\.\d+\.\d+')
+         if [ -z "$libffi_version" ]; then
+              echo "No libffi version found for package ${package} version ${version}"
+              exit 1
+         fi
+         echo "LIBFFI_VERSION=${libffi_version/v/}" >> $GITHUB_ENV 
+
+      - name: Clean workspace
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          safe-rm -rf * .*
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        uses: Loongson-Cloud-Community/pypi@main
+        with:
+          name: cffi
+          version: ${{ env.VERSION }}
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
+          cibuildwheel
+        env:
+          CIBW_BEFORE_ALL_LINUX: |
+            set -eux && \
+            curl -L -O https://github.com/libffi/libffi/archive/v${{ env.LIBFFI_VERSION }}.tar.gz && \
+            tar zxf v${{ env.LIBFFI_VERSION }}.tar.gz && cd libffi-${{ env.LIBFFI_VERSION }} && \
+            ((command -v apk && apk add libtool) || true) && \
+            ./autogen.sh && \
+            ./configure --without-gcc-arch --disable-docs --with-pic --enable-shared=no && \
+            make install && \
+            cd .. && \
+            rm -rf libffi-${{ env.LIBFFI_VERSION }}
+          CIBW_ARCHS: "loongarch64"
+          CIBW_BUILD: "*-${{ matrix.platform }}_loongarch64"
+          CIBW_SKIP: "pp*"
+          CIBW_TEST_SKIP: "*"
+          CIBW_ENVIRONMENT_LINUX: >
+            HTTPS_PROXY=${{ secrets.PROXY_URL }}
+            PIP_EXTRA_INDEX_URL="https://lpypi.loongnix.cn/loongson/pypi/+simple"
+            PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+            CFLAGS="-Dffi_call=cffistatic_ffi_call"
+
+
+      - name: Upload wheels
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}

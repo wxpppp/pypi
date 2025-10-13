@@ -1,0 +1,103 @@
+name: build torch wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+
+jobs:
+  build:
+    name: Build torch ${{ matrix.platform }} wheel on loongarch64
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+        platform: ["cp39-manylinux", "cp310-manylinux", "cp311-manylinux", "cp312-manylinux", "cp313-manylinux"]
+    steps:
+      - name: Check if exists
+        run: |
+          pkg=torch
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          platform="${{ matrix.platform }}"
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls ${url} | grep -q ${pkg}-${version}-.*${platform}.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "${platform} wheels already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "${platform} wheels not found, continue building"
+          fi
+
+          echo "VERSION=v${version}" >> $GITHUB_ENV
+
+      - name: Clean workspace
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          safe-rm -rf * .*
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          version=${{ env.VERSION }}
+          wget -qO - https://github.com/pytorch/pytorch/releases/download/${version}/pytorch-${version}.tar.gz | tar xz --strip-components=1
+
+          if [ ! -f ".ci/docker/ci_commit_pins/nccl-cu12.txt" ]; then
+            mkdir -p .ci/docker/ci_commit_pins
+            wget -qO .ci/docker/ci_commit_pins/nccl-cu12.txt https://github.com/pytorch/pytorch/raw/refs/tags/${version}/.ci/docker/ci_commit_pins/nccl-cu12.txt
+          fi
+
+          cd third_party/sleef
+          wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/sleef/sleef_loong64.patch | patch -p1
+          
+          cd ../cpuinfo
+          wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/cpuinfo/cpuinfo_loong64.patch | patch -p1 
+
+          echo "PYTORCH_BUILD_VERSION=${version/v/}" >> $GITHUB_ENV
+        env:
+          HTTPS_PROXY: ${{ secrets.PROXY_URL }}
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
+          cibuildwheel
+        env:
+          CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
+          CIBW_ARCHS: "loongarch64"
+          CIBW_BEFORE_BUILD: pip install -r requirements.txt
+          CIBW_BUILD: "${{ matrix.platform }}_loongarch64"
+          CIBW_SKIP: "pp*"
+          CIBW_TEST_SKIP: "*"
+          CIBW_ENVIRONMENT_LINUX: >
+            PIP_EXTRA_INDEX_URL="https://lpypi.loongnix.cn/loongson/pypi/+simple"
+            PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+            BUILD_TEST=0
+            PYTORCH_BUILD_NUMBER=1
+            PYTORCH_BUILD_VERSION=${{ env.PYTORCH_BUILD_VERSION }}
+
+
+      - name: Upload wheels
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}

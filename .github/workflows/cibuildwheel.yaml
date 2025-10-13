@@ -1,0 +1,41 @@
+name: build cibuildwheel wheel
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+env:
+  PACKAGE: cibuildwheel
+jobs:
+  build:
+    name: Build cibuildwheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+    steps:
+      - name: Clean workspace
+        run: |
+          safe-rm -rf * .*
+
+      - name: Download source
+        uses: Loongson-Cloud-Community/pypi@main
+        with:
+          name: loong64/${{ env.PACKAGE }}
+          version: ${{ github.event.inputs.version }}
+          platform: github
+
+      - name: Build wheel
+        run: |
+          pip wheel . --wheel-dir=wheelhouse --no-deps
+
+      - name: Upload wheels
+        run: |
+          ls wheelhouse/*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}

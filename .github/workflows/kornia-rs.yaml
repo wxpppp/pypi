@@ -1,0 +1,144 @@
+name: build kornia-rs wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+
+jobs:
+  check-wheel-exists:
+    name: Check if kornia-rs exists
+    runs-on: loongarch64-abi2.0
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      build_manylinux: ${{ steps.check.outputs.build_manylinux }}
+    steps:
+      - name: Check if kornia-rs wheels exist
+        id: check
+        run: |
+          pkg=kornia-rs
+
+          check_wheel() {
+            local tag=$1
+
+            if curl -s "${url}" | grep -q "kornia_rs-${version}.*${tag}.*loongarch64"; then
+              echo "build_${tag}=false" >> $GITHUB_OUTPUT
+              echo "${tag} wheel already exists."
+            else
+              echo "build_${tag}=true" >> $GITHUB_OUTPUT
+              echo "${tag} wheel not found, continue building."
+            fi
+
+          }
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://api.github.com/repos/kornia/kornia-rs/releases/latest"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.tag_name')"
+          fi
+
+          echo "version=${version}" >> $GITHUB_OUTPUT
+          version=${version#v}
+
+          for tag in manylinux; do
+            check_wheel "$tag"
+          done
+
+  debug:
+    name: Debug kornia-rs outputs
+    needs: check-wheel-exists
+    runs-on: loongarch64-abi2.0
+    steps:
+      - run: |
+          echo "build_manylinux=${{ needs.check-wheel-exists.outputs.build_manylinux }}"
+
+  download:
+    name: Download kornia-rs source
+    needs: check-wheel-exists
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+    if: ${{ needs.check-wheel-exists.outputs.build_manylinux == 'true' }}
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - name: Download source
+        uses: actions/checkout@v4
+        with:
+          repository: kornia/kornia-rs
+          ref: ${{ needs.check-wheel-exists.outputs.version }}
+        
+  build:
+    name: Build kornia-rs ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    needs: [check-wheel-exists, download]
+    runs-on: ${{ matrix.os }}
+    if: ${{ needs.check-wheel-exists.outputs.build_manylinux == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+        python-version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.13t"]
+        include:
+          - image: "lcr.loongnix.cn/pypa/manylinux_2_38_loongarch64"
+            target: "loongarch64-unknown-linux-gnu" 
+            platform: "manylinux_2_38"
+    container:
+      image: ${{ matrix.image }}
+      env:
+        HTTPS_PROXY: ${{ secrets.PROXY_URL }}
+        SKIP: true
+    steps:
+      - name: Setup rust-toolchain
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        env:
+          RUSTUP_INIT_SKIP_PATH_CHECK: "1"
+      
+      # Skip turbojpeg require-simd feature
+      - name: Patch source
+        run: |
+          cargo vendor
+          # Remove 'require-simd' from turbojpeg/Cargo.toml
+          sed -i -e '/^default = \[/,/]/ s/"require-simd",\?//g' -e '/^require-simd *=/d' vendor/turbojpeg/Cargo.toml
+          # Reset kornia-io/Cargo.toml turbojpeg path
+          sed -i 's|^turbojpeg = { version = "1\.2", optional = true }|turbojpeg = { path = "../../vendor/turbojpeg", optional = true }|' crates/kornia-io/Cargo.toml
+
+      - name: Build wheel
+        run: |
+          pipx install maturin --pip-args="--only-binary=:all:" --force
+          maturin build --release --out dist -i python${{ matrix.python-version }} -m kornia-py/Cargo.toml --target ${{ matrix.target }} --compatibility ${{ matrix.platform }}
+        env:
+          PIP_EXTRA_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+
+  upload:
+    name: Upload wheels
+    needs: [check-wheel-exists, build]
+    runs-on: ${{ matrix.os }}
+    if: ${{ needs.check-wheel-exists.outputs.build_manylinux == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+    env:
+      TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+      TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+    steps:
+      - name: Upload manylinux wheel
+        run: |
+          ls dist/*-manylinux_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*-manylinux_*.whl

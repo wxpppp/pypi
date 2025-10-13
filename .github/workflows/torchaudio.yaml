@@ -1,0 +1,110 @@
+name: build torchaudio wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+
+jobs:
+  build:
+    name: Build torchaudio ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+        platform: ["cp39-manylinux", "cp310-manylinux", "cp311-manylinux", "cp312-manylinux", "cp313-manylinux"]
+    steps:
+      - name: Check if exists
+        run: |
+          pkg=torchaudio
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          platform="${{ matrix.platform }}"
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls ${url} | grep -q ${pkg}-${version}-.*${platform}.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "${platform} wheels already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "${platform} wheels not found, continue building"
+          fi
+
+          echo "VERSION=v${version}" >> $GITHUB_ENV
+          echo "BUILD_VERSION=${version}" >> $GITHUB_ENV
+
+      - name: Clean workspace
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          safe-rm -rf * .*
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: pytorch/audio
+          ref: ${{ env.VERSION }}
+          submodules: true
+
+      - name: Patch source
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          mkdir -p packaging/wheel
+          wget -qO - https://github.com/loong64/audio/raw/refs/heads/main/ffmpeg_loong64.patch | patch -p1
+          wget -q -O packaging/wheel/relocate.py https://github.com/loong64/audio/raw/refs/heads/main/relocate.py
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
+          cibuildwheel
+        env:
+          CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
+          CIBW_ARCHS: "loongarch64"
+          CIBW_BEFORE_BUILD_LINUX: >
+            pip install torch==${{ env.BUILD_VERSION }} wheel &&
+            pip install auditwheel==6.2.0
+          CIBW_BUILD_FRONTEND: "pip; args: --no-use-pep517"
+          CIBW_BUILD: "${{ matrix.platform }}_loongarch64"
+          CIBW_SKIP: "pp*"
+          CIBW_TEST_SKIP: "*"
+          CIBW_ENVIRONMENT_LINUX: >
+            PIP_INDEX_URL="https://lpypi.loongnix.cn/loongson/pypi/+simple"
+            BUILD_VERSION=${{ env.BUILD_VERSION }}
+            HTTPS_PROXY=${{ secrets.PROXY_URL }}
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
+            mkdir -p dist {dest_dir} &&
+            cp -f {wheel} dist &&
+            for pkg in dist/*-linux_*.whl; do
+              if [[ ! -e $pkg ]]; then
+                continue
+              fi
+              abs_pkg=$(realpath $pkg)
+              repair_manylinux_2_38.sh $abs_pkg
+            done &&
+            python packaging/wheel/relocate.py &&
+            cp -f dist/*.whl {dest_dir}
+
+      - name: Upload wheels
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}

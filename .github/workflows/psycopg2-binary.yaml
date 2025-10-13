@@ -1,0 +1,127 @@
+name: build psycopg2-binary wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+env:
+  PACKAGE: psycopg2_binary
+  REPOSITORY: psycopg/psycopg2
+
+jobs:
+#  env:
+#    PSYCOPG2_TESTDB: postgres
+#    PSYCOPG2_TESTDB_HOST: 172.17.0.1
+#    PSYCOPG2_TESTDB_USER: postgres
+#    PSYCOPG2_TESTDB_PASSWORD: password
+#    PSYCOPG2_TEST_FAST: 1
+
+#  services:
+#      postgresql:
+#        image: postgres:16
+#        env:
+#          POSTGRES_PASSWORD: password
+#        ports:
+#          - 5432:5432
+#        # Set health checks to wait until postgres has started
+#        options: >-
+#          --health-cmd pg_isready
+#          --health-interval 10s
+#          --health-timeout 5s
+#          --health-retries 5
+
+  build:
+    name: Build psycopg2-binary ${{ matrix.pyver }} ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    env:
+      LIBPQ_VERSION: "16.0"
+      OPENSSL_VERSION: "1.1.1w"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+        platform: [manylinux, musllinux]
+        pyver: [cp38, cp39, cp310, cp311, cp312, cp313]
+    steps:
+      - name: Check if exists
+        run: |
+          pkg=${{ env.PACKAGE }}
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          platform="${{ matrix.platform }}"
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://api.github.com/repos/${{ env.REPOSITORY }}/tags"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.[0].name')"
+          fi
+
+          if curl -Ls ${url} | grep -q ${pkg}-${version}-.*${{ matrix.pyver }}-${platform}.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "${platform} wheels already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "${platform} wheels not found, continue building"
+          fi
+
+          echo "VERSION=${version}" >> $GITHUB_ENV
+
+      - name: Clean workspace
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          safe-rm -rf * .*
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPOSITORY }}
+          ref: ${{ env.VERSION }}
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
+          cibuildwheel
+        env:
+          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          CIBW_ARCHS: "loongarch64"
+          CIBW_BUILD: "${{ matrix.pyver }}-${{ matrix.platform }}_loongarch64"
+          CIBW_BEFORE_ALL_LINUX: |
+            if command -v yum >/dev/null 2>&1; then
+              source /etc/os-release && 
+              sed -i "s/centos/$ID/g" scripts/build/build_libpq.sh &&
+              sed -i "s/pam-devel/pam-devel perl/g" scripts/build/build_libpq.sh &&
+              sed -i "s/centos/$ID/g" scripts/build/print_so_versions.sh &&
+              sed -i "s/centos/$ID/g" scripts/build/wheel_linux_before_all.sh
+            fi
+            ./scripts/build/wheel_linux_before_all.sh
+          CIBW_REPAIR_WHEEL_COMMAND: >-
+            ./scripts/build/strip_wheel.sh {wheel}
+            && auditwheel repair -w {dest_dir} {wheel}
+          CIBW_TEST_SKIP: "*"
+          CIBW_ENVIRONMENT_PASS_LINUX: LIBPQ_VERSION OPENSSL_VERSION PIP_INDEX_URL
+          CIBW_ENVIRONMENT: >-
+            PACKAGE_NAME=psycopg2-binary
+            LIBPQ_BUILD_PREFIX=/host/tmp/libpq.build-${{ matrix.platform }}-${{ env.LIBPQ_VERSION }}
+            PATH="$LIBPQ_BUILD_PREFIX/bin:$PATH"
+            LD_LIBRARY_PATH="$LIBPQ_BUILD_PREFIX/lib:$LIBPQ_BUILD_PREFIX/lib64"
+            HTTPS_PROXY=${{ secrets.PROXY_URL }}
+
+      - name: Upload wheels
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          ls wheelhouse/*${{ matrix.pyver }}-${{ matrix.platform }}_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.pyver }}-${{ matrix.platform }}_*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}

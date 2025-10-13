@@ -1,0 +1,185 @@
+name: build hf-xet wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+
+jobs:
+  check-wheel-exists:
+    name: Check if exists
+    runs-on: loongarch64-abi2.0
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      build_manylinux: ${{ steps.check.outputs.build_manylinux }}
+      build_musllinux: ${{ steps.check.outputs.build_musllinux }}
+    steps:
+      - name: Check if wheels exist
+        id: check
+        run: |
+          pkg=hf-xet
+
+          check_wheel() {
+            local tag=$1
+
+            if curl -Ls "${url}" | grep -q "hf_xet-${version}.*${tag}.*loongarch64"; then
+              echo "build_${tag}=false" >> $GITHUB_OUTPUT
+              echo "${tag} wheel already exists."
+            else
+              echo "build_${tag}=true" >> $GITHUB_OUTPUT
+              echo "${tag} wheel not found, continue building."
+            fi
+
+          }
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          echo "version=${version}" >> $GITHUB_OUTPUT
+
+          for tag in manylinux musllinux; do
+            check_wheel "$tag"
+          done
+
+  debug:
+    name: Debug outputs
+    needs: check-wheel-exists
+    runs-on: loongarch64-abi2.0
+    steps:
+      - run: |
+          echo "build_manylinux=${{ needs.check-wheel-exists.outputs.build_manylinux }}"
+          echo "build_musllinux=${{ needs.check-wheel-exists.outputs.build_musllinux }}"
+
+  download:
+    name: Download source
+    needs: check-wheel-exists
+    env:
+      version: ${{ needs.check-wheel-exists.outputs.version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+    if: ${{ needs.check-wheel-exists.outputs.build_manylinux == 'true' || needs.check-wheel-exists.outputs.build_musllinux == 'true' }}
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - name: Download source
+        uses: Loongson-Cloud-Community/pypi@main
+        with:
+          name: hf-xet
+          version: ${{ env.version }}
+        
+  build:
+    name: Build hf-xet ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    needs: [check-wheel-exists, download]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: loongarch64-abi2.0
+            image: "lcr.loongnix.cn/pypa/manylinux_2_38_loongarch64"
+            target: "loongarch64-unknown-linux-gnu"
+            platform: "manylinux_2_38"
+          - os: loongarch64-abi2.0
+            image: "lcr.loongnix.cn/pypa/musllinux_1_2_loongarch64"
+            target: "loongarch64-unknown-linux-musl"
+            platform: "musllinux_1_2"
+    container:
+      image: ${{ matrix.image }}
+      env:
+        RUSTUP_HOME: /root/.rustup
+        CARGO_HOME: /root/.cargo
+        CARGO_PROFILE_RELEASE_LTO: "${{ matrix.platform.lto || 'fat' }}"
+        HTTPS_PROXY: ${{ secrets.PROXY_URL }}
+        SKIP: true
+    steps:
+      - name: Check if wheel exists
+        if: |
+          ${{ (matrix.platform == 'manylinux_2_38' && needs.check-wheel-exists.outputs.build_manylinux == 'true') || (matrix.platform  == 'musllinux_1_2' && needs.check-wheel-exists.outputs.build_musllinux == 'true') }}
+        run:
+          echo "SKIP=false" >> $GITHUB_ENV
+
+      - name: Install dependence
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          if command -v yum &> /dev/null; then
+            yum install libatomic perl-IPC-Cmd -y
+          fi
+
+      - name: Setup rust-toolchain
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Patch source
+        if: ${{ env.SKIP != 'true' && matrix.platform  == 'musllinux_1_2' }}
+        working-directory: hf_xet
+        run: |
+          export PATH="/root/.cargo/bin:$PATH"
+          cargo vendor --quiet
+          cd vendor/rustix && \
+          wget -qO - https://raw.githubusercontent.com/Loongson-Cloud-Community/uv/refs/heads/dev/fix-rustix-STATX_A_B-is-ambiguous-error.patch | patch -p1
+
+          cd ../..
+          cat >> Cargo.toml <<'EOF'
+          [patch.crates-io]
+          rustix = { package = "rustix", version = "1.0.8", path = "vendor/rustix" }
+          EOF
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        working-directory: hf_xet
+        run: |
+          export PATH="/root/.cargo/bin:$PATH"
+          pipx install maturin
+          maturin build --release -o dist --target ${{ matrix.target }} --compatibility ${{ matrix.platform }}
+        env:
+          RUST_LIBC_MUSL_GEQ_1_2_3: 1
+          PIP_EXTRA_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+
+  upload:
+    name: Upload wheels
+    needs: [check-wheel-exists, build]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: hf_xet
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+    env:
+      TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+      TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+      build_manylinux: ${{ needs.check-wheel-exists.outputs.build_manylinux }}
+      build_musllinux: ${{ needs.check-wheel-exists.outputs.build_musllinux }}
+    steps:
+      - name: Upload manylinux wheel
+        if: ${{ env.build_manylinux == 'true' }}
+        run: |
+          ls dist/*-manylinux_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*-manylinux_*.whl
+
+      - name: Upload musllinux wheel
+        if: ${{ env.build_musllinux == 'true' }}
+        run: |
+          ls dist/*-musllinux_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*-musllinux_*.whl

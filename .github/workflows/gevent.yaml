@@ -1,0 +1,94 @@
+name: build gevent wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+env:
+  PACKAGE: gevent
+jobs:
+  build:
+    name: Build gevent ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: loongarch64-abi2.0 
+            platform: "manylinux_2_38_loongarch64"
+            image: "ghcr.io/loong64/manylinux_2_38_loongarch64"
+          - os: loongarch64-abi2.0
+            platform: "musllinux_1_2_loongarch64"
+            image: "ghcr.io/loong64/musllinux_1_2_loongarch64"
+    steps:
+      - name: Check if exists
+        run: |
+          pkg=${{ env.PACKAGE }}
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          platform="${{ matrix.platform }}"
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -s ${url} | grep -q ${pkg}-${version}-.*${platform}.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "${platform} wheels already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "${platform} wheels not found, continue building"
+          fi
+
+          echo "VERSION=${version}" >> $GITHUB_ENV
+
+      - name: Clean workspace
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          safe-rm -rf * .*
+          safe-chown .cache
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PACKAGE }}/${{ env.PACKAGE }}
+          ref: ${{ env.VERSION }}
+      
+      # There is no cp314 cffi package on lpypi now.
+      - name: Patch source
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          sed -i 's/314,313/313/g' scripts/releases/make-manylinux
+          sed -i 's@GEVENT_MANYLINUX_NAME@PIP_EXTRA_INDEX_URL -e PIP_INDEX_URL -e GEVENT_MANYLINUX_NAME@g' scripts/releases/make-manylinux
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        env:
+          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          DOCKER_IMAGE: ${{ matrix.image }}
+          GEVENT_MANYLINUX_NAME: ${{ matrix.platform }}
+          GEVENTTEST_SKIP_ALL: 1
+          GITHUB_ACTIONS: 1
+        run: |
+          scripts/releases/make-manylinux
+
+      - name: Upload wheels
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          ls wheelhouse/*-${{ matrix.platform }}.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}

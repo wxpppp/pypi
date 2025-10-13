@@ -1,0 +1,138 @@
+name: build PyYAML wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+
+env:
+  LIBYAML_REPO: 'https://github.com/yaml/libyaml'
+  LIBYAML_REF: '0.2.5'
+
+jobs:
+  build:
+    name: Build PyYAML ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+        arch: ["loongarch64"]
+        platform: ["manylinux_2_38", "musllinux_1_2"]
+    steps:
+      - name: Check if exists
+        run: |
+          pkg=PyYAML
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          platform="${{ matrix.platform }}"
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls ${url} | grep ${version} | grep pyyaml | grep -q ${platform}.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "${platform} wheels already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "${platform} wheels not found, continue building"
+          fi
+
+          echo "VERSION=${version}" >> $GITHUB_ENV
+
+      - name: Clean workspace
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          safe-rm -rf * .*
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        uses: Loongson-Cloud-Community/pypi@main
+        with:
+          name: PyYAML
+          version: ${{ env.VERSION }}
+
+      - name: Build libyaml
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          case "${{ matrix.platform }}" in
+            manylinux_*)
+              DOCKER_IMAGE="lcr.loongnix.cn/pypa/manylinux_2_38_loongarch64"
+              DOCKER_CMD="yum install -y perl-Test-Harness"
+              ;;
+            musllinux_*)
+              DOCKER_IMAGE="lcr.loongnix.cn/pypa/musllinux_1_2_loongarch64"
+              DOCKER_CMD="apk add perl-utils git libtool && export ACLOCAL_PATH=/usr/local/share/aclocal"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+
+          docker run --rm \
+          --volume "$(pwd):/io" \
+          --env LIBYAML_REF \
+          --env LIBYAML_REPO \
+          --workdir /io \
+          "${DOCKER_IMAGE}" \
+          sh -c "${DOCKER_CMD} && git config --global http.https://github.com.proxy ${{ secrets.PROXY_URL }} && /io/packaging/build/libyaml.sh"
+
+      - name: ensure output is world readable (or cache fill fails with Permission Denied)
+        if: ${{ env.SKIP != 'true' }}
+        run: >
+          sudo chmod -R a+r ./libyaml/
+
+      - name: Build wheels
+        if: ${{ env.SKIP != 'true' }}
+        env:
+          CIBW_ARCHS: "${{ matrix.arch }}"
+          CIBW_BUILD: "*-${{ contains(matrix.platform, 'musllinux') && 'musllinux' || 'manylinux' }}_${{ matrix.arch }}"
+          CIBW_BUILD_VERBOSITY: 1
+          CIBW_ENVIRONMENT: >
+            LD_LIBRARY_PATH=../libyaml/src/.libs
+            PYYAML_FORCE_CYTHON=1
+            PYYAML_FORCE_LIBYAML=1
+            PIP_EXTRA_INDEX_URL="https://lpypi.loongnix.cn/loongson/pypi/+simple"
+            PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+          CIBW_TEST_COMMAND: cd {project}; pytest
+          CIBW_TEST_REQUIRES: pytest
+        run: |
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
+          set -eux
+          
+          cat << 'EOF' > build_config.toml
+          [tool.cibuildwheel.config-settings]
+          pyyaml_build_config='{"force":1, "library_dirs": ["libyaml/src/.libs"], "include_dirs": ["libyaml/include"]}'
+          EOF
+
+          CIBW_BEFORE_BUILD="ls -l {project}" python3 -m cibuildwheel --config-file $(pwd)/build_config.toml --platform auto --output-dir ./wheelhouse
+
+      - name: Upload wheels
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          ls wheelhouse/*${{ matrix.platform }}_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.platform }}_*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+
+
+
+
+
+        
+
+
+

@@ -1,0 +1,114 @@
+name: build llguidance wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+env:
+  CARGO_TERM_COLOR: always
+  PACKAGE_NAME: llguidance
+jobs:
+  check-wheel-exists:
+    name: Check if exists
+    runs-on: loongarch64-abi2.0
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Check if wheels exist
+        id: check
+        run: |
+          pkg=${{ env.PACKAGE_NAME }}
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls "${url}" | grep -q "${pkg}-${version}.*loongarch64"; then
+            echo "wheel has already exist"
+            echo "build=false" >> $GITHUB_OUTPUT
+          else
+            echo "wheel not found, continue building."
+            echo "build=true" >> $GITHUB_OUTPUT
+          fi
+
+          echo "version=v${version}" >> $GITHUB_OUTPUT
+
+  download:
+    name: Download source
+    needs: check-wheel-exists
+    env:
+      version: ${{ needs.check-wheel-exists.outputs.version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+    if: ${{ needs.check-wheel-exists.outputs.build == 'true' }}
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - name: Download source
+        uses: actions/checkout@v4
+        with:
+          repository: guidance-ai/llguidance 
+          ref: ${{ env.version }}
+
+  build:
+    name: Build llguidance ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    needs: [check-wheel-exists, download]
+    if: ${{ needs.check-wheel-exists.outputs.build == 'true' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: loongarch64-abi2.0
+            image: "lcr.loongnix.cn/pypa/manylinux_2_38_loongarch64"
+            platform: "manylinux_2_36"
+    container:
+      image: ${{ matrix.image }}
+      env:
+        RUSTUP_HOME: /root/.rustup
+        CARGO_HOME: /root/.cargo
+        HTTPS_PROXY: ${{ secrets.PROXY_URL }}
+    steps:
+      - name: Setup rust-toolchain
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "/root/.cargo/bin" >> $GITHUB_PATH
+
+      - name: download maturin binary
+        run: pipx install maturin --pip-args="--only-binary=:all:" --force
+        env:
+          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+
+      - name: Build wheel
+        run: |
+          maturin build --release --out dist --compatibility ${{ matrix.platform }}
+        env:
+          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+
+      - name: Upload wheel
+        run: |
+           ls dist/${{ env.PACKAGE_NAME }}*.whl || exit 1
+           pipx install twine
+           twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/${{ env.PACKAGE_NAME }}*.whl
+        env:
+          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}

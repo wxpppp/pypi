@@ -1,0 +1,163 @@
+name: build shapely wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+
+env:
+  PACKAGE: shapely
+  GEOS_VERSION: "3.13.1"
+
+jobs:
+  check-wheel-exists:
+    name: Check if exists
+    runs-on: loongarch64-abi2.0
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      build_manylinux: ${{ steps.check.outputs.build_manylinux }}
+      build_musllinux: ${{ steps.check.outputs.build_musllinux }}
+    steps:
+
+      - name: Check if wheels exist
+        id: check
+        run: |
+          pkg=${{ env.PACKAGE }}
+
+          check_wheel() {
+            local tag=$1
+
+            if curl -Ls "${url}" | grep -q "${pkg}-${version}.*${tag}.*loongarch64"; then
+              echo "build_${tag}=false" >> $GITHUB_OUTPUT
+              echo "${tag} wheel already exists."
+            else
+              echo "build_${tag}=true" >> $GITHUB_OUTPUT
+              echo "${tag} wheel not found, continue building."
+            fi
+
+          }
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+          echo "version=${version}" >> $GITHUB_OUTPUT
+
+          for tag in manylinux musllinux; do
+            check_wheel "$tag"
+          done
+
+  debug:
+    name: Debug outputs
+    needs: check-wheel-exists
+    runs-on: loongarch64-abi2.0
+    steps:
+      - run: |
+          echo "build_manylinux=${{ needs.check-wheel-exists.outputs.build_manylinux }}"
+          echo "build_musllinux=${{ needs.check-wheel-exists.outputs.build_musllinux }}"
+
+  download:
+    name: Download source
+    needs: check-wheel-exists
+    env:
+      version: ${{ needs.check-wheel-exists.outputs.version }}
+    runs-on: loongarch64-abi2.0
+    if: ${{ needs.check-wheel-exists.outputs.build_manylinux == 'true' || needs.check-wheel-exists.outputs.build_musllinux == 'true' }}
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+      
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          repository: shapely/shapely
+          ref: ${{ env.version }}
+          fetch-depth: 0
+
+  build:
+    name: Build shapely ${{ matrix.baseimage }} wheel on ${{ matrix.os }}
+    needs: [check-wheel-exists, download]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: loongarch64-abi2.0
+            baseimage: manylinux_2_38_loongarch64
+            cibw_build: "*manylinux_loongarch64"
+            arch: loongarch64
+          - os: loongarch64-abi2.0
+            baseimage: musllinux_1_2_loongarch64
+            cibw_build: "*musllinux_loongarch64"
+            arch: loongarch64
+    env:
+      version: ${{ needs.check-wheel-exists.outputs.version }}
+      basetag: latest
+      SKIP: true
+
+    steps:
+      - name: Check if wheel exists
+        if: ${{ (matrix.baseimage == 'manylinux_2_38_loongarch64' && needs.check-wheel-exists.outputs.build_manylinux == 'true') || (matrix.baseimage  == 'musllinux_1_2_loongarch64' && needs.check-wheel-exists.outputs.build_musllinux == 'true') }}
+        run: echo "SKIP=false" >> $GITHUB_ENV
+
+      - name: Build Docker image with GEOS
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          docker build \
+          --build-arg BASEIMAGE=lcr.loongnix.cn/pypa/${{ matrix.baseimage }}:${{ env.basetag }} \
+          --build-arg GEOS_VERSION=${{ env.GEOS_VERSION }} \
+          --build-arg https_proxy=${{ secrets.PROXY_URL }} \
+          --tag ${{ matrix.baseimage }}_geos:${{ env.GEOS_VERSION }} \
+          --file ci/Dockerfile \
+          .
+
+      - name: Add GEOS LICENSE
+        if: ${{ env.SKIP != 'true' }}
+        run: cp ci/wheelbuilder/LICENSE_GEOS .
+        shell: bash
+
+      - name: Build wheels
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
+          cibuildwheel
+        env:
+          PIP_EXTRA_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BEFORE_ALL: |
+            if command -v yum &> /dev/null; then
+              cp -r /usr/local/lib64/* /usr/lib64/
+            fi
+          CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
+          CIBW_BEFORE_BUILD: |
+            # For free threading support in Cython install a pre-release version of Cython
+            python -c "import sysconfig, subprocess; subprocess.check_call(['pip', 'install', '--pre', 'cython'] if sysconfig.get_config_var('Py_GIL_DISABLED') else ['pip', 'install', 'cython'])" &&
+            pip install numpy setuptools wheel
+          CIBW_BUILD: ${{ matrix.cibw_build }}
+          CIBW_MANYLINUX_LOONGARCH64_IMAGE: ${{ matrix.baseimage }}_geos:${{ env.GEOS_VERSION }}
+          CIBW_MUSLLINUX_LOONGARCH64_IMAGE: ${{ matrix.baseimage }}_geos:${{ env.GEOS_VERSION }}
+          CIBW_ENVIRONMENT_PASS_LINUX: >
+            PIP_INDEX_URL
+            PIP_EXTRA_INDEX_URL
+
+      - name: Upload wheels
+        if: ${{ env.SKIP != 'true' }}
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+        run: |
+          ls wheelhouse/*${{ matrix.baseimage }}.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.baseimage }}.whl
+

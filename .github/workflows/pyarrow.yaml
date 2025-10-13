@@ -1,0 +1,103 @@
+name: build pyarrow wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+env:
+  PACKAGE: pyarrow
+jobs:
+  build:
+    name: Build pyarrow ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+        platform: ["manylinux"]
+    steps:
+      - name: Check if exists
+        run: |
+          pkg=${{ env.PACKAGE }}
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          platform="${{ matrix.platform }}"
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls ${url} | grep -q ${pkg}-${version}-.*${platform}.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "${platform} wheels already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "${platform} wheels not found, continue building"
+          fi
+
+          echo "VERSION=apache-arrow-${version}" >> $GITHUB_ENV
+
+      - name: Clean workspace
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          safe-rm -rf * .*
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: apache/arrow
+          ref: ${{ env.VERSION }}
+          submodules: true
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          cp -r cpp python/
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
+          cibuildwheel python 
+        env:
+          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          CIBW_ARCHS: "loongarch64"
+          CIBW_BUILD: "*-${{ matrix.platform }}_loongarch64"
+          CIBW_BEFORE_ALL_LINUX: >
+            (command -v yum && yum -y install ninja-build) || true &&
+            pwd &&
+            cmake -S cpp -B cpp/build -GNinja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX=$ARROW_HOME \
+              -DARROW_BUILD_STATIC=ON \
+              -DARROW_BUILD_SHARED=ON \
+              -DARROW_CSV=ON \
+              -DARROW_JSON=ON \
+              -DARROW_FILESYSTEM=ON \
+              -DARROW_COMPUTE=ON &&
+            cmake --build cpp/build --target install
+          CIBW_ENVIRONMENT: >
+            ARROW_HOME=/tmp/local
+            ARROW_BUILD_TYPE=release
+            CMAKE_PREFIX_PATH=$ARROW_HOME:$CMAKE_PREFIX_PATH
+            LD_LIBRARY_PATH=$ARROW_HOME/lib64:$LD_LIBRARY_PATH
+            PYARROW_PARALLEL=4
+          CIBW_ENVIRONMENT_PASS_LINUX: >
+            PIP_INDEX_URL
+
+      - name: Upload wheels
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
