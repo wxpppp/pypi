@@ -118,7 +118,10 @@ jobs:
             PACKAGE_NAME=psycopg2-binary
             LIBPQ_BUILD_PREFIX=/host/tmp/libpq.build-${{ matrix.platform }}-${{ env.LIBPQ_VERSION }}
             PATH="$LIBPQ_BUILD_PREFIX/bin:$PATH"
-            LD_LIBRARY_PATH="$LIBPQ_BUILD_PREFIX/lib:$LIBPQ_BUILD_PREFIX/lib64"
+            # 仅在编译 PostgreSQL / psycopg2 时生效，不污染系统命令
+            C_INCLUDE_PATH="$LIBPQ_BUILD_PREFIX/include:$C_INCLUDE_PATH"
+            LIBRARY_PATH="$LIBPQ_BUILD_PREFIX/lib:$LIBPQ_BUILD_PREFIX/lib64:$LIBRARY_PATH"
+            PKG_CONFIG_PATH="$LIBPQ_BUILD_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
             HTTPS_PROXY=${{ secrets.PROXY_URL }}
 
       - name: Upload wheels
