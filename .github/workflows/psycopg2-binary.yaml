@@ -38,14 +38,14 @@ jobs:
     name: Build psycopg2-binary ${{ matrix.pyver }} ${{ matrix.platform }} wheel on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     env:
-      LIBPQ_VERSION: "16.0"
-      OPENSSL_VERSION: "1.1.1w"
+      LIBPQ_VERSION: "17.6"
+      OPENSSL_VERSION: "3.5.4"
     strategy:
       fail-fast: false
       matrix:
         os: [loongarch64-abi2.0]
         platform: [manylinux, musllinux]
-        pyver: [cp38, cp39, cp310, cp311, cp312, cp313]
+        pyver: [cp39, cp310, cp311, cp312, cp313]
     steps:
       - name: Check if exists
         run: |
