@@ -125,6 +125,7 @@ jobs:
         if: ${{ env.SKIP != 'true' }}
         run: |
           ls wheelhouse/*${{ matrix.pyver }}-${{ matrix.platform }}_*.whl || exit 1
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple twine==6.1.0
           twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.pyver }}-${{ matrix.platform }}_*.whl
         env:
           TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
