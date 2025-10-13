@@ -47,7 +47,7 @@ jobs:
               base=$(basename "$f")
               pkg=$(basename "$f" .yaml)
               # skip this workflow itself
-              if [ "$base" = "README.yaml" ]; then
+              if [ "$base" = "readme-sync.yaml" ]; then
                 continue
               fi
               link="$REPO_URL/blob/main/.github/workflows/$base"
@@ -71,7 +71,7 @@ jobs:
             echo "## 🕒 Last Updated"
             echo ""
             echo "- UTC Time: \`$(date -u '+%Y-%m-%d %H:%M:%S')\`"
-            echo "- Local Time (Asia/Shanghai): \`$(date '+%Y-%m-%d %H:%M:%S')\`"
+            echo "- Local Time (Asia/Shanghai): \`$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')\`"
           } > tmp/README.md
 
           # ---------- 中文版本 ----------
@@ -93,7 +93,7 @@ jobs:
             for f in $(ls .github/workflows/*.yaml | sort); do
               base=$(basename "$f")
               pkg=$(basename "$f" .yaml)
-              if [ "$base" = "README.yaml" ]; then
+              if [ "$base" = "readme-sync.yaml" ]; then
                 continue
               fi
               if [ "$base" = "deploy-page.yaml" ]; then
@@ -121,7 +121,7 @@ jobs:
             echo "## 🕒 更新时间"
             echo ""
             echo "- 世界标准时间 (UTC)：\`$(date -u '+%Y-%m-%d %H:%M:%S')\`"
-            echo "- 北京时间 (Asia/Shanghai)：\`$(date '+%Y-%m-%d %H:%M:%S')\`"
+            echo "- 北京时间 (Asia/Shanghai)：\`$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')\`"
           } > tmp/README_zh.md
 
           mv tmp/README.md README.md
