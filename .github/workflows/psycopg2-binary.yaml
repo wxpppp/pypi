@@ -3,6 +3,10 @@ name: build psycopg2-binary wheel
 on:
   schedule:
     - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
   workflow_dispatch:
     inputs:
       version:
