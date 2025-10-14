@@ -17,6 +17,10 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Config
+      shell: bash
+      run: |
+        pip install -U pip
     - name: Download from pypi
       shell: bash
       if: ${{ inputs.platform == 'pypi' }}
