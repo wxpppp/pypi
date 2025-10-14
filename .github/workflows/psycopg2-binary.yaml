@@ -78,29 +78,15 @@ jobs:
             LD_LIBRARY_PATH="$LIBPQ_BUILD_PREFIX/lib:$LIBPQ_BUILD_PREFIX/lib64"
             HTTPS_PROXY=${{ secrets.PROXY_URL }}
 
-      - name: Upload wheels to artifact
-        if: ${{ env.SKIP != 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.pyver }}-${{ matrix.platform }}
-          path: wheelhouse/*
-
-  upload:
-    name: Upload wheels to PyPI
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Download wheels from artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: wheels-cp39-manylinux  # 这里可以循环或者按需要下载所有 matrix artifact
-          path: ./wheelhouse
-
       - name: Upload wheels
+        if: >
+            github.event_name != 'pull_request' &&
+            env.SKIP != 'true'
         run: |
-          pip3 install twine==6.1.0
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*
+          ls wheelhouse/*${{ matrix.pyver }}-${{ matrix.platform }}_*.whl || exit 1
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple twine==6.1.0
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.pyver }}-${{ matrix.platform }}_*.whl
         env:
           TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+
