@@ -37,7 +37,6 @@ jobs:
 #          --health-interval 10s
 #          --health-timeout 5s
 #          --health-retries 5
-
   build:
     name: Build psycopg2-binary ${{ matrix.pyver }} ${{ matrix.platform }} wheel on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -121,14 +120,22 @@ jobs:
             LD_LIBRARY_PATH="$LIBPQ_BUILD_PREFIX/lib:$LIBPQ_BUILD_PREFIX/lib64"
             HTTPS_PROXY=${{ secrets.PROXY_URL }}
 
+  upload:
+    name: Upload wheels to PyPI
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Download wheels from artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: wheels-${{ matrix.pyver }}-${{ matrix.platform }}
+          path: ./wheelhouse
+
       - name: Upload wheels
-        if: >
-            github.event_name != 'pull_request' &&
-            env.SKIP != 'true'
         run: |
-          ls wheelhouse/*${{ matrix.pyver }}-${{ matrix.platform }}_*.whl || exit 1
-          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple twine==6.1.0
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.pyver }}-${{ matrix.platform }}_*.whl
+          pip3 install twine==6.1.0
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*
         env:
           TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
