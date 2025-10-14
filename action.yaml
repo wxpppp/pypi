@@ -19,7 +19,7 @@ runs:
   steps:
     - name: Config
       shell: bash
-      run: |
+      run:
         pip install -U pip
     - name: Download from pypi
       shell: bash
