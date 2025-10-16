@@ -1,0 +1,98 @@
+name: build ctranslate2 wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+
+jobs:
+  build:
+    name: Build ctranslate2 wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: loongarch64-abi2.0
+            arch: loongarch64
+            opt_level: generic
+    steps:
+      - name: Check if exists
+        run: |
+          pkg=ctranslate2
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls ${url} | grep -q ctranslate2-${version}-.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "${pkg} wheels already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "${pkg} wheels not found, continue building"
+          fi
+
+          echo "VERSION=v${version}" >> $GITHUB_ENV
+
+      - name: Clean workspace
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          safe-rm -rf * .*
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: OpenNMT/CTranslate2
+          ref: ${{ env.VERSION }}
+          submodules: true
+          fetch-depth: 1
+      
+      - name: Apply patch
+        run: |
+          wget -qO - https://raw.githubusercontent.com/Loongson-Cloud-Community/CTranslate2/refs/heads/dev/0001-add-loong64-support.patch | patch -p1
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
+          cibuildwheel
+        env:
+          CIBW_ENVIRONMENT_PASS_LINUX: CIBW_ARCHS
+          CIBW_BEFORE_ALL_LINUX: python/tools/prepare_build_environment_linux.sh
+          CIBW_BEFORE_BUILD: pip install -r python/install_requirements.txt
+          CIBW_SKIP: pp* *-musllinux_*
+          PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+          PIP_EXTRA_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_ENVIRONMENT_LINUX: >
+            FAISS_OPT_LEVEL=${{ matrix.opt_level }}
+            FAISS_ENABLE_GPU=OFF
+          CIBW_BEFORE_ALL: bash scripts/build_${{ runner.os }}.sh
+          CIBW_TEST_SKIP: "*"
+          CIBW_ENVIRONMENT_PASS_LINUX: >
+            PIP_INDEX_URL
+            PIP_EXTRA_INDEX_URL
+
+      - name: Upload wheels
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          ls wheelhouse/*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
