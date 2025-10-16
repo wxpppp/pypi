@@ -18,6 +18,7 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    if: github.repository == 'Loongson-Cloud-Community/pypi'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,4 +45,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
