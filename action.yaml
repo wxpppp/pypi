@@ -21,7 +21,6 @@ runs:
       shell: bash
       run:
         pip install -U pip
-        dnf install patch -y
     - name: Download from pypi
       shell: bash
       if: ${{ inputs.platform == 'pypi' }}
