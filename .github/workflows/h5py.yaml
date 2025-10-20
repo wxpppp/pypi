@@ -69,8 +69,8 @@ jobs:
         if: ${{ env.SKIP != 'true' }}
         run: |
           sed -i '/pushd hdf5-\$HDF5_VERSION/a\
-          curl -sSfL -o ./bin/config.sub https://mirrors.tuna.tsinghua.edu.cn/gnu/config/config.sub\n\
-          curl -sSfL -o ./bin/config.guess https://mirrors.tuna.tsinghua.edu.cn/gnu/config/config.guess' ci/get_hdf5_if_needed.sh
+          curl -sSfL -o ./bin/config.sub https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.sub\n\
+          curl -sSfL -o ./bin/config.guess https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess' ci/get_hdf5_if_needed.sh
 
       - name: Cache HDF5
         if: ${{ env.SKIP != 'true' }}
