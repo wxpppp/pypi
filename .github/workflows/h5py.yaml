@@ -10,7 +10,7 @@ on:
         default: 'latest'
 env:
   PACKAGE: h5py
-  HDF5_VERSION: 1.12.0
+  HDF5_VERSION: 1.12.1
   HDF5_DIR: ${{ github.workspace }}/cache/hdf5
 jobs:
   build:
