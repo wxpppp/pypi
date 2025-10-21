@@ -143,7 +143,7 @@ jobs:
           cargo vendor
           sed -i '/^\[patch\.crates-io\]/a rustix = { package = "rustix", version = "1.0.8", path = "vendor/rustix" }' Cargo.toml
           cd vendor/rustix && \
-          wget -qO - https://raw.githubusercontent.com/Loongson-Cloud-Community/uv/refs/heads/dev/fix-rustix-STATX_A_B-is-ambiguous-error.patch | patch -p1
+          wget -qO - https://raw.githubusercontent.com/Loongson-Cloud-Community/uv/refs/heads/dev-ruff-0.4.10/fix-rustix-STATX_A_B-is-ambiguous-error.patch | patch -p1
 
       - name: Build wheel
         if: ${{ env.SKIP != 'true' }}
