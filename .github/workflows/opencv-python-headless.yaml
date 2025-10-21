@@ -20,7 +20,7 @@ jobs:
         python-version: ['3.9']
         platform: [loongarch64]
         with_contrib: [0]
-        without_gui: [1]
+        without_gui: [0]
         build_sdist: [0]
     env:
       ACTIONS_ALLOW_UNSECURE_COMMANDS: true
