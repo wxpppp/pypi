@@ -91,6 +91,7 @@ jobs:
         run: source scripts/build.sh
         env:
           HTTPS_PROXY: ${{ secrets.PROXY_URL }}
+          HOME: /root
 
       - name: Upload wheels
         if: ${{ env.SKIP != 'true' }}
