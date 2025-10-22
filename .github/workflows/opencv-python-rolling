@@ -1,0 +1,106 @@
+name: build opencv-python-rolling wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+
+jobs:
+  build:
+    name: Build opencv-python-rolling ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+        python-version: ['3.9']
+        platform: [loongarch64]
+        with_contrib: [0]
+        without_gui: [0]
+        build_sdist: [0]
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+      REPO_DIR: .
+      PROJECT_SPEC: opencv-python
+      MB_PYTHON_VERSION: ${{ matrix.python-version }}
+      TRAVIS_PYTHON_VERSION: ${{ matrix.python-version }}
+      MB_ML_VER: 2_38
+      TRAVIS_BUILD_DIR: ${{ github.workspace }}
+      CONFIG_PATH: travis_config.sh
+      DOCKER_IMAGE: ghcr.io/loongson-cloud-community/opencv-python-manylinux_2_38-loongarch64:20250829_abi2.0
+      USE_CCACHE: 0
+      UNICODE_WIDTH: 32
+      PLAT: loongarch64
+      SDIST: ${{ matrix.build_sdist || 0 }}
+      ENABLE_HEADLESS: ${{ matrix.without_gui }}
+      ENABLE_CONTRIB: ${{ matrix.with_contrib }}
+    steps:
+      - name: Setup environment
+      run: |
+        echo "ENABLE_ROLLING=1" >> $GITHUB_ENV
+      - name: Check if exists
+        run: |
+          pkg=opencv-python-rolling
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            version="latest"
+          else
+            version="${{ github.event.inputs.version }}"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -s ${url} | grep ${version} | grep -q opencv_python-rolling.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "${pkg}-${version}-${platform} wheel already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "${pkg}-${version}-${platform} wheel not found, continue building."
+          fi
+
+          echo "VERSION=${version##*.}" >> $GITHUB_ENV
+
+      - name: Clean workspace
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          safe-rm -rf * .*
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        uses: actions/checkout@v3
+        with:
+          repository: opencv/opencv-python
+          ref: ${{ env.VERSION }}
+          submodules: false
+
+      - name: Patch source
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          sed -i '/^git submodule update --init multibuild[[:space:]]*$/d' scripts/build.sh
+          git submodule update --init multibuild
+          sed -i '/-e MB_ML_LIBC="\$libc" \\/a\        -e HTTPS_PROXY="$HTTPS_PROXY" \\' multibuild/travis_linux_steps.sh
+
+      - name: Build a package
+        if: ${{ env.SKIP != 'true' }}
+        run: source scripts/build.sh
+        env:
+          HTTPS_PROXY: ${{ secrets.PROXY_URL }}
+          HOME: /root
+
+      - name: Upload wheels
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          ls wheelhouse/*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.platform }}.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
