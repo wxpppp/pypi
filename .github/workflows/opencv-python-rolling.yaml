@@ -40,8 +40,8 @@ jobs:
       ENABLE_CONTRIB: ${{ matrix.with_contrib }}
     steps:
       - name: Setup environment
-      run: |
-        echo "ENABLE_ROLLING=1" >> $GITHUB_ENV
+        run: |
+          echo "ENABLE_ROLLING=1" >> $GITHUB_ENV
       - name: Check if exists
         run: |
           pkg=opencv-python-rolling
