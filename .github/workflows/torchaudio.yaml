@@ -65,8 +65,8 @@ jobs:
         if: ${{ env.SKIP != 'true' }}
         run: |
           mkdir -p packaging/wheel
-          wget -qO - https://github.com/loong64/audio/raw/refs/heads/main/ffmpeg_loong64.patch | patch -p1
-          wget -q -O packaging/wheel/relocate.py https://github.com/loong64/audio/raw/refs/heads/main/relocate.py
+          wget -qO - https://github.com/loong64/audio/raw/refs/tags/v2.9.0/ffmpeg_loong64.patch | patch -p1
+          wget -q -O packaging/wheel/relocate.py https://github.com/loong64/audio/raw/refs/tags/v2.9.0/relocate.py
 
       - name: Build wheel
         if: ${{ env.SKIP != 'true' }}
