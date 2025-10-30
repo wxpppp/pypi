@@ -8,6 +8,9 @@ on:
       version:
         required: false
         default: 'latest'
+      force:
+        required: false
+        default: 'false'
 
 env:
   PACKAGE: llvmlite
@@ -45,13 +48,19 @@ jobs:
           fi
 
           if curl -Ls ${url} | grep -q ${pkg}-${version}-.*${python_tag}-${platform}.*loongarch64; then
-            echo "SKIP=true" >> $GITHUB_ENV
+            skip=true
             echo "${platform} wheels already exists."
           else
-            echo "SKIP=false" >> $GITHUB_ENV
+            skip=false
             echo "${platform} wheels not found, continue building"
           fi
 
+          if [[ "${{ github.event.inputs.force }}" == "true" ]]; then
+            skip=false
+            echo "Rebuild wheels"
+          fi
+
+          echo "SKIP=${skip}" >> $GITHUB_ENV
           echo "VERSION=${version}" >> $GITHUB_ENV
 
       - name: Clean workspace
