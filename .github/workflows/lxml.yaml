@@ -69,7 +69,7 @@ jobs:
         if: ${{ env.SKIP != 'true' }}
         run: |
           sed -i '/^skip = \[/a\    "cp38-*",' pyproject.toml
-          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple --no-cache cibuildwheel==2.22.0
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple --no-cache --force-reinstall cibuildwheel==2.22.0
           cibuildwheel
         env:
           HTTPS_PROXY: ${{ secrets.PROXY_URL }}
