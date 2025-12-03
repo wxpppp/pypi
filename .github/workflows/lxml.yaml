@@ -69,6 +69,7 @@ jobs:
         if: ${{ env.SKIP != 'true' }}
         run: |
           sed -i '/^skip = \[/a\    "cp38-*",' pyproject.toml
+          sed -i 's|https://ftp.gnu.org/pub/gnu/libiconv/|https://mirrors.tuna.tsinghua.edu.cn/gnu/libiconv/|g' buildlibxml.py
           pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple --no-cache --force-reinstall cibuildwheel==2.22.0
           cibuildwheel
         env:
