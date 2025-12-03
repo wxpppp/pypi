@@ -75,7 +75,7 @@ jobs:
         env:
           HTTPS_PROXY: ${{ secrets.PROXY_URL }}
           PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
-          inputs_wheels_cps: cp39*
+          inputs_wheels_cps: cp310*
           inputs_wheels_linux_loongarch64: 1
 
       - name: Upload wheels
