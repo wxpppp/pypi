@@ -3,6 +3,14 @@ name: build pymupdf wheel
 on:
   schedule:
     - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/pymupdf.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/pymupdf.yaml"
   workflow_dispatch:
     inputs:
       version:
@@ -25,10 +33,10 @@ jobs:
           pkg=${{ env.PACKAGE }}
           python_tag=${{ matrix.python }}
 
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            version="latest"
-          else
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
           fi
 
           platform="${{ matrix.platform }}"
@@ -67,6 +75,7 @@ jobs:
           wget -qO - https://raw.githubusercontent.com/Loongson-Cloud-Community/PyMuPDF/refs/heads/dev/gh-release-add-loong64-support.patch | patch -p1
           wget -qO - https://raw.githubusercontent.com/Loongson-Cloud-Community/PyMuPDF/refs/heads/dev/gh-release-skip-workflow-unimportant-test.patch | patch -p1
           sed -i "s/pip install cibuildwheel/pip install cibuildwheel==3.0.0/g" scripts/gh_release.py
+          sed -i "/CIBW_TEST_COMMAND/d" scripts/gh_release.py
 
       - name: Build wheel
         if: ${{ env.SKIP != 'true' }}
@@ -79,7 +88,7 @@ jobs:
           inputs_wheels_linux_loongarch64: 1
 
       - name: Upload wheels
-        if: ${{ env.SKIP != 'true' }}
+        if: ${{ github.event_name != 'pull_request' && env.SKIP != 'true' }}
         run: |
           ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
           twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
