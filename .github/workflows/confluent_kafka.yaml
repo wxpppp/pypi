@@ -1,0 +1,94 @@
+name: build confluent-kafka wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/confluent-kafka.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/confluent-kafka.yaml"
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+env:
+  PACKAGE: confluent-kafka
+jobs:
+  build:
+    name: Build confluent-kafka ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-24.04"]
+        arch: ["loongarch64"]
+        platform: ["manylinux"]
+    steps:
+      - name: Check if exists
+        run: |
+          pkg=${{ env.PACKAGE }}
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
+          fi
+
+          platform="${{ matrix.platform }}"
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls ${url} | grep -q confluent_kafka-${version}.*-${platform}.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "${platform} wheels already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "${platform} wheels not found, continue building"
+          fi
+
+          echo "VERSION=v${version}" >> $GITHUB_ENV
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        uses: actions/checkout@v4
+        with: 
+          repository: confluentinc/confluent-kafka-python
+          ref: ${{ env.VERSION }}
+
+      - name: Setup QEMU
+        if: ${{ env.SKIP != 'true' }}
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        uses: loong64/cibuildwheel@v3.3.1
+        env:
+          CIBW_SKIP: "pp* cp27-* cp35-* cp36-* *i686 *musllinux*"
+          CIBW_ARCHS: "${{ matrix.arch }}"
+          CIBW_BEFORE_BUILD: |
+                yum install -y perl zlib-devel gcc-c++ python3 curl-devel perl-IPC-Cmd perl-Pod-Html && \
+                bash tools/bootstrap-librdkafka.sh --require-ssl ${{ env.VERSION }} /usr
+          CIBW_ENVIRONMENT: >
+                CFLAGS="-Werror -Wno-strict-aliasing -Wno-parentheses"
+          CIBW_TEST_REQUIRES: "pytest"
+          CIBW_TEST_COMMAND: "pytest {project}/tests/test_error.py"
+          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          CIBW_ENVIRONMENT_PASS_LINUX: PIP_INDEX_URL
+
+      - name: Upload wheels
+        if: ${{ github.event_name != 'pull_request' && env.SKIP != 'true' }}
+        run: |
+          ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
