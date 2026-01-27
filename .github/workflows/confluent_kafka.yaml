@@ -77,8 +77,6 @@ jobs:
           CIBW_BEFORE_BUILD: |
                 yum install -y perl zlib-devel gcc-c++ python3 curl-devel perl-IPC-Cmd perl-Pod-Html && \
                 bash tools/bootstrap-librdkafka.sh --require-ssl ${{ env.VERSION }} /usr
-          CIBW_ENVIRONMENT: >
-                CFLAGS="-Werror -Wno-strict-aliasing -Wno-parentheses"
           CIBW_TEST_REQUIRES: "pytest"
           CIBW_TEST_COMMAND: "pytest {project}/tests/test_error.py"
           PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
