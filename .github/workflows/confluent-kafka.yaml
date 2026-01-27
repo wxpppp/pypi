@@ -74,7 +74,7 @@ jobs:
         env:
           CIBW_SKIP: "pp* cp27-* cp35-* cp36-* *i686 *musllinux*"
           CIBW_ARCHS: "${{ matrix.arch }}"
-          CIBW_BEFORE_BUILD: |
+          CIBW_BEFORE_ALL_LINUX: |
                 yum install -y perl zlib-devel gcc-c++ python3 curl-devel perl-IPC-Cmd perl-Pod-Html && \
                 bash tools/bootstrap-librdkafka.sh --require-ssl ${{ env.VERSION }} /usr
           CIBW_TEST_REQUIRES: "pytest"
