@@ -86,6 +86,7 @@ jobs:
         if: ${{ github.event_name != 'pull_request' && env.SKIP != 'true' }}
         run: |
           ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
+          pip install twine==6.0.1
           twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
         env:
           TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
