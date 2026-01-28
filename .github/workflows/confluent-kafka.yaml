@@ -22,6 +22,8 @@ jobs:
   build:
     name: Build confluent-kafka ${{ matrix.platform }} wheel on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    outputs:
+      upload: ${{ steps.check.outputs.upload }}
     strategy:
       fail-fast: false
       matrix:
@@ -30,6 +32,7 @@ jobs:
         platform: ["manylinux"]
     steps:
       - name: Check if exists
+        id: check
         run: |
           pkg=${{ env.PACKAGE }}
 
@@ -49,9 +52,11 @@ jobs:
 
           if curl -Ls ${url} | grep -q confluent_kafka-${version}.*-${platform}.*loongarch64; then
             echo "SKIP=true" >> $GITHUB_ENV
+            echo "upload=false" >> $GITHUB_OUTPUT
             echo "${platform} wheels already exists."
           else
             echo "SKIP=false" >> $GITHUB_ENV
+            echo "upload=true" >> $GITHUB_OUTPUT
             echo "${platform} wheels not found, continue building"
           fi
 
@@ -82,8 +87,32 @@ jobs:
           PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
           CIBW_ENVIRONMENT_PASS_LINUX: PIP_INDEX_URL
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: wheelhouse/*
+
+
+  upload:
+    needs: [build]
+    runs-on: ${{ matrix.os }}
+    if: needs.build.outputs.upload == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [loongarch64-abi2.0]
+        platform: ["manylinux"]
+
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: wheelhouse
+
       - name: Upload wheels
-        if: ${{ github.event_name != 'pull_request' && env.SKIP != 'true' }}
         run: |
           ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
           pip install twine==6.0.1
