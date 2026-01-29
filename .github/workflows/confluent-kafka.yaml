@@ -96,7 +96,7 @@ jobs:
   upload:
     needs: [build]
     runs-on: ${{ matrix.os }}
-    if: needs.build.outputs.upload == 'true'
+    if: needs.build.outputs.upload == 'true' && github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
