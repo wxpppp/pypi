@@ -1,0 +1,89 @@
+name: sync pypdfium2 wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/pypdfium2.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/pypdfium2.yaml"
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+env:
+  PACKAGE: pypdfium2
+jobs:
+  check:
+    name: Check pypdfium2 wheel on ubuntu-24.04
+    runs-on: ubuntu-24.04
+    outputs:
+      upload: ${{ steps.check.outputs.upload }}
+      version: ${{ steps.check.outputs.version }}
+
+    steps:
+      - name: Check if exists
+        id: check
+        run: |
+          pkg=${{ env.PACKAGE }}
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://api.github.com/repos/pypdfium2-team/pypdfium2/releases/latest"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r .tag_name)"
+          fi
+
+          if curl -Ls ${url} | grep -q ${pkg}-${version}.*loongarch64; then
+            echo "upload=false" >> $GITHUB_OUTPUT
+            echo "wheel already exists."
+          else
+            echo "upload=true" >> $GITHUB_OUTPUT
+            echo "wheel not found, continue sync."
+          fi
+
+          echo "VERSION=${version}" >> $GITHUB_OUTPUT
+
+  upload_pypi:
+    name: Upload wheels
+    needs: [check]
+    runs-on: loongarch64-abi2.0
+    if: needs.check.outputs.upload == 'true' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - name: Upload
+        run: |
+          PLATFORMS=("manylinux_2_38_loongarch64" "musllinux_1_2_loongarch64")
+          VERSION=${{ needs.check.outputs.version }}
+          mkdir -p dist
+          for PLAT in "${PLATFORMS[@]}"; do
+            WHL_NAME="pypdfium2-${VERSION}-py3-none-${PLAT}.whl"
+            URL="https://github.com/pypdfium2-team/pypdfium2/releases/download/${VERSION}/${WHL_NAME}"
+            echo "Downloading $WHL_NAME..."
+            if curl -L -f -o "dist/${WHL_NAME}" "$URL"; then
+              echo "Successfully downloaded $WHL_NAME"
+            else
+              echo "Warning: Failed to download $WHL_NAME (it might not exist for this release)"
+            fi
+          done
+              
+          ls dist/pypdfium2-*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/pypdfium2-*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
