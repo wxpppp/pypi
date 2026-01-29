@@ -3,6 +3,14 @@ name: build patchelf wheel
 on:
   schedule:
     - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/patchelf.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/patchelf.yaml"
   workflow_dispatch:
     inputs:
       version:
@@ -12,68 +20,77 @@ env:
   PACKAGE: patchelf
 jobs:
   build:
-    name: Build patchelf wheel on ${{ matrix.os }}
-    runs-on: loongarch64-abi2.0
+    name: Build patchelf wheel on ubuntu-24.04
+    runs-on: ubuntu-24.04
+    outputs:
+      upload: ${{ steps.check.outputs.upload }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: "loongarch64"
+            docker_arch: "loong64"
             test_image: ghcr.io/loong64/manylinux_2_38_loongarch64 
     steps:
       - name: Check if exists
+        id: check
         run: |
           pkg=${{ env.PACKAGE }}
 
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            version="latest"
-          else
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
           fi
 
           url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
-          upstream_url="https://pypi.org/pypi/${pkg}/json"
+          upstream_url="https://api.github.com/repos/mayeut/patchelf-pypi/tags"
 
           if [[ "${version}" == "latest" ]]; then
-            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+            version="$(curl -s ${upstream_url} | grep '"name":' | head -n 1 | cut -d '"' -f4)"
           fi
 
-          if curl -Ls ${url} | grep -q ${pkg}-${version}.*loongarch64; then
+          if curl -Ls ${url} | grep -q ${pkg}-${version#v}.*loongarch64; then
             echo "SKIP=true" >> $GITHUB_ENV
+            echo "upload=false" >> $GITHUB_OUTPUT
             echo "wheel already exists."
           else
             echo "SKIP=false" >> $GITHUB_ENV
+            echo "upload=true" >> $GITHUB_OUTPUT
             echo "wheel not found, continue building"
           fi
 
-          echo "VERSION=v${version}" >> $GITHUB_ENV
-
-      - name: Clean workspace
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          safe-rm -rf * .*
+          echo "VERSION=${version#v}" >> $GITHUB_ENV
 
       - name: Download source
         if: ${{ env.SKIP != 'true' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           repository: mayeut/patchelf-pypi
-          ref: ${{ env.VERSION }}
+          ref: v${{ env.VERSION }}
           fetch-depth: 0
           submodules: 'recursive'
 
-      - name: Build wheel
+      - name: Patch source
         if: ${{ env.SKIP != 'true' }}
         run: |
-          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==3.0.0
-          cibuildwheel
+          sed -i 's#PLATFORM_TAG="manylinux2014_${AUDITWHEEL_ARCH}.manylinux_2_17_${AUDITWHEEL_ARCH}.musllinux_1_1_${AUDITWHEEL_ARCH}"#PLATFORM_TAG="manylinux_2_38_${AUDITWHEEL_ARCH}.musllinux_1_2_${AUDITWHEEL_ARCH}"#' repair.sh
+
+
+      - name: Set up QEMU
+        if: ${{ env.SKIP != 'true' }}
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        uses: loong64/cibuildwheel@v3.3.1
         env:
           PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
-          PLATFORM_TAG: manylinux_2_38_loongarch64.musllinux_1_2_loongarch64
-          CIBW_ARCHS: "loongarch64"
+          SETUPTOOLS_SCM_PRETEND_VERSION: "${{ env.VERSION }}"
+          CIBW_ARCHS: "${{ matrix.arch }}"
           CIBW_ENVIRONMENT_PASS_LINUX: >
             PIP_INDEX_URL
-            PLATFORM_TAG
+            SETUPTOOLS_SCM_PRETEND_VERSION
 
       - name: Test wheel on ${{ matrix.test_image }}
         if: ${{ env.SKIP != 'true' }}
@@ -91,12 +108,33 @@ jobs:
           pipx install -f \${WHEEL}
           patchelf --version
           EOF
-          docker run -v $(pwd):/gha ${{ matrix.test_image }} sh -ec "cd /gha && sh ./check.sh"
-      - name: Upload wheels
-        if: ${{ env.SKIP != 'true' }}
+          docker run --platform linux/${{ matrix.arch == 'i686' && 'amd64' || matrix.docker_arch }} -v $(pwd):/gha ${{ matrix.test_image }} sh -ec "cd /gha && sh ./check.sh"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "cibw-wheels"
+          path: ./wheelhouse/*.whl
+
+  upload_pypi:
+    name: Upload wheels
+    needs: [build]
+    runs-on: loongarch64-abi2.0
+    if: needs.build.outputs.upload == 'true' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4 # using node20
+        with:
+          name: cibw-wheels
+          path: dist
+
+      - name: Upload
         run: |
-          ls wheelhouse/patchelf-*.whl || exit 1
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/patchelf-*.whl
+          ls dist/patchelf-*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/patchelf-*.whl
         env:
           TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
