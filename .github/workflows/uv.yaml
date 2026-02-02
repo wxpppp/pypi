@@ -40,7 +40,6 @@ jobs:
           pkg=${{ env.PACKAGE_NAME }}
 
           check_wheel() {
-            curl -Ls "${url}" | grep "${pkg}-${version}.*loongarch64"
 
             if curl -Ls "${url}" | grep -q "${pkg}-${version}.*loongarch64"; then
               echo "build=false" >> $GITHUB_OUTPUT
@@ -52,10 +51,10 @@ jobs:
 
           }
 
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            version="latest"
-          else
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
           fi
 
           url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
