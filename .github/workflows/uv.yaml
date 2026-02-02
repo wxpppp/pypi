@@ -123,7 +123,7 @@ jobs:
   upload:
     needs: [check, linux-loongarch64]
     runs-on: loongarch64-abi2.0
-    if: needs.check.outupts.build == 'true' && github.event_name != 'pull_request'
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
 
     steps:
       - name: Clean workspace
