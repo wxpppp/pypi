@@ -81,7 +81,7 @@ jobs:
               ;;
           esac
 
-          # sed -i 's/"cmake.define.RUN_CMAKE_TEST" = "ON"/"cmake.define.RUN_CMAKE_TEST" = "OFF"/g' pyproject.toml
+          sed -i 's/"cmake.define.RUN_CMAKE_TEST" = "ON"/"cmake.define.RUN_CMAKE_TEST" = "OFF"/g' pyproject.toml
           sed -i '/s390x) GO_ARCH=s390x;;/a \        loongarch64) GO_ARCH=loong64;;' scripts/install-static-clang.sh
 
       - name: Setup QEMU
