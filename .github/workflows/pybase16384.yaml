@@ -1,0 +1,120 @@
+name: build pybase16384 wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/pybase16384.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/pybase16384.yaml"
+  workflow_dispatch:
+
+env:
+  PACKAGE: pybase16384 
+jobs:
+  check:
+    name: Check if wheel exists
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check if exists
+        id: check
+        run: |
+          pkg=${{ env.PACKAGE }}
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="latest"
+          else
+            version="latest"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls ${url} | grep -q ${pkg}-${version}-.*loongarch64; then
+            echo "build=false" >> $GITHUB_OUTPUT
+            echo "${pkg} wheel already exists."
+          else
+            echo "build=true" >> $GITHUB_OUTPUT
+            echo "${pkg} wheel not found, continue building."
+          fi
+
+          echo "version=${version}" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build wheels on Ubuntu-24.04
+    needs: [check]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-24.04]
+      fail-fast: false
+    if: needs.check.outputs.build == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: synodriver/pybase16384
+
+      - name: Check out recursively
+        run: git submodule update --init --recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build wheel
+        uses: loong64/cibuildwheel@v3.3.1
+        env:
+          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          CIBW_BEFORE_BUILD: pip install -r requirements.txt
+          CIBW_ARCHS_LINUX: "loongarch64"
+          CIBW_ENVIRONMENT: USE-CYTHON="1" USE-CFFI="1"
+          CIBW_PROJECT_REQUIRES_PYTHON: ">=3.8"
+          CIBW_ENABLE: "cpython-freethreading"
+          CIBW_ALLOW_EMPTY: True
+          CIBW_SKIP: "cp313t-*"
+          CIBW_ENVIRONMENT_PASS_LINUX: >
+            PIP_INDEX_URL
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}-${{ github.sha }}.zip 
+          path: ./wheelhouse/*.whl
+
+  upload:
+    needs: [check, build]
+    runs-on: loongarch64-abi2.0
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}-${{ github.sha }}.zip
+          path: dist
+
+      - name: Upload wheels
+        run: |
+          ls dist/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+
