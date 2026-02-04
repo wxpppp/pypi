@@ -75,7 +75,19 @@ jobs:
 
       - name: Patch source
         run: |
-          curl -fsSL https://github.com/Loongson-Cloud-Community/curl_cffi/raw/dev/curl-cffi-add-loongarch64-support.patch | patch -p1 
+          TAG_PATCH_URL="https://github.com/Loongson-Cloud-Community/curl_cffi/raw/${{ needs.check.outputs.version }}/curl-cffi-add-loongarch64-support.patch"
+          DEV_PATCH_URL="https://github.com/Loongson-Cloud-Community/curl_cffi/raw/dev/curl-cffi-add-loongarch64-support.patch"
+          echo "Checking for patch at: $TAG_PATCH_URL"
+
+          if curl --output /dev/null --silent --head --fail "$TAG_PATCH_URL"; then
+            echo "Success: Found patch for version ${{ needs.check.outputs.version }}. Applying..."
+            curl -fsSL "$TAG_PATCH_URL" | patch -p1
+          else
+            echo "Notice: Patch not found for tag. Falling back to dev branch..."
+            echo "Fetching from: $DEV_PATCH_URL"
+
+            curl -fsSL "$DEV_PATCH_URL" | patch -p1
+          fi
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
