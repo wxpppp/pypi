@@ -1,0 +1,120 @@
+name: build curl-cffi wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/curl-cffi.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/curl-cffi.yaml"
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+env:
+  PACKAGE: curl-cffi 
+jobs:
+  check:
+    name: Check if wheel exists
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check if exists
+        id: check
+        run: |
+          pkg=${{ env.PACKAGE }}
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://api.github.com/repos/lexiforest/curl_cffi/releases/latest"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r .tag_name)"
+          fi
+
+          if curl -Ls ${url} | grep -q curl_cffi-${version#v}-.*loongarch64; then
+            echo "build=false" >> $GITHUB_OUTPUT
+            echo "${pkg} wheel already exists."
+          else
+            echo "build=true" >> $GITHUB_OUTPUT
+            echo "${pkg} wheel not found, continue building."
+          fi
+
+          echo "version=${version}" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build wheels on Ubuntu-24.04
+    needs: [check]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-24.04]
+    if: needs.check.outputs.build == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: lexiforest/curl_cffi
+          ref: ${{ needs.check.outputs.version }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Patch source
+        run: |
+          curl -fsSL https://github.com/Loongson-Cloud-Community/curl_cffi/raw/dev/curl-cffi-add-loongarch64-support.patch | patch -p1 
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build wheel
+        uses: loong64/cibuildwheel@v3.3.1
+        env:
+          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          CIBW_ARCHS_LINUX: "loongarch64"
+          CIBW_BUILD: "cp310-manylinux_loongarch64"
+          CIBW_ENVIRONMENT_PASS_LINUX: >
+            PIP_INDEX_URL
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: curl_cffi-${{ github.sha }}-${{ matrix.os }}.zip 
+          path: ./wheelhouse/*.whl
+
+  upload:
+    needs: [check, build]
+    runs-on: loongarch64-abi2.0
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: curl_cffi-*
+          merge-multiple: true
+          path: dist
+
+      - name: Upload wheels
+        run: |
+          ls dist/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+
