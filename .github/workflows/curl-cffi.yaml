@@ -55,7 +55,7 @@ jobs:
           echo "version=${version}" >> $GITHUB_OUTPUT
 
   build:
-    name: Build wheels on Ubuntu-24.04
+    name: Build wheels
     needs: [check]
     runs-on: ${{ matrix.os }}
     strategy:
