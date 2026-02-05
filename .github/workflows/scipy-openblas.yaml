@@ -106,7 +106,7 @@ jobs:
           commit="${{ github.event.inputs.commit }}"
         fi
 
-        repo="MacPython/openblas-libs"
+        repo="loong64/openblas-libs"
         if [[ "${commit}" == "latest" ]]; then
           commit=${{ needs.check-upstream-update.outputs.latest_sha }}
         fi
@@ -128,8 +128,8 @@ jobs:
 
     - name: Build Openblas
       run: |
-        sed -i "s/quay.io/lcr.loongnix.cn/g" tools/build_steps.sh
         set -xeo pipefail
+        sed -i "s/quay.io/lcr.loongnix.cn/g" tools/build_steps.sh
         source tools/build_steps.sh
         openblas_version=$(cat pyproject.toml | grep '^version' | sed -E 's/version *= *"([^"]+)"/\1/')
         openblas_commit=v$(echo ${openblas_version} | awk -F. '{print $1"."$2"."$3}')
