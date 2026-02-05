@@ -1,0 +1,191 @@
+name: build scipy-openblas(>=v0.3.30.0.3) wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      commit:
+        required: false
+        default: 'latest'
+env:
+  REPO_DIR: OpenBLAS
+
+jobs:
+  check-upstream-update:
+    name: Check scipy-openblas upstream Changes
+    runs-on: ubuntu-latest
+    outputs:
+      needs_build: ${{ steps.check.outputs.build_needed }}
+      latest_sha: ${{ steps.latest.outputs.latest_sha }}
+    steps:
+      - name: Get upstream latest commit
+        id: latest
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.commit }}" == "latest" ]]; then
+            latest_sha=$(git ls-remote https://github.com/MacPython/openblas-libs.git refs/heads/main | cut -f1)
+          else
+            latest_sha=${{ github.event.inputs.commit }}
+          fi
+
+          echo "latest_sha=$latest_sha"
+          echo "latest_sha=$latest_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Restore last built commit from cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: last_upstream_commit.txt
+          key: upstream-commit-sha
+
+      - name: Load previous commit
+        id: previous
+        run: |
+          if [ -f last_upstream_commit.txt ]; then
+            echo "last_sha=$(cat last_upstream_commit.txt)" >> "$GITHUB_OUTPUT"
+          else
+            echo "last_sha=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compare commits
+        id: check
+        run: |
+          if [ "${{ steps.latest.outputs.latest_sha }}" != "${{ steps.previous.outputs.last_sha }}" ]; then
+            echo "build_needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-wheel:
+    name: Build scipy-openblas ${{ matrix.MB_ML_LIBC }} wheel on loongarch64
+    needs: check-upstream-update
+    if: needs.check-upstream-update.outputs.needs_build == 'true'
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, PLAT: loongarch64, INTERFACE64: '0', MB_ML_VER: '_2_38', MB_ML_LIBC: manylinux }
+          - { os: ubuntu-24.04, PLAT: loongarch64, INTERFACE64: '1', MB_ML_VER: '_2_38', MB_ML_LIBC: manylinux }
+          - { os: ubuntu-24.04, PLAT: loongarch64, INTERFACE64: '0', MB_ML_VER: '_1_2', MB_ML_LIBC: musllinux }
+          - { os: ubuntu-24.04, PLAT: loongarch64, INTERFACE64: '1', MB_ML_VER: '_1_2', MB_ML_LIBC: musllinux }
+    env:
+      NIGHTLY: false
+      MB_ML_LIBC: ${{ matrix.MB_ML_LIBC }}
+      MB_ML_VER: ${{ matrix.MB_ML_VER }}
+      INTERFACE64: ${{ matrix.INTERFACE64 }}
+      BUILD_DIR: ${{ github.workspace }}
+      PLAT: ${{ matrix.PLAT }}
+      OS-NAME: ${{ matrix.os }}
+
+    steps:
+    - name: Get commit
+      run: |
+        case ${{ matrix.INTERFACE64 }} in
+          0) pkg="scipy-openblas32" ;;
+          1) pkg="scipy-openblas64" ;;
+        esac
+
+        if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          commit="latest"
+        else
+          commit="${{ github.event.inputs.commit }}"
+        fi
+
+        repo="loong64/openblas-libs"
+        if [[ "${commit}" == "latest" ]]; then
+          commit=${{ needs.check-upstream-update.outputs.latest_sha }}
+        fi
+
+        echo "COMMIT=${commit}" >> $GITHUB_ENV
+        echo "REPO=${repo}" >> $GITHUB_ENV
+
+    - name: Download source
+      uses: actions/checkout@v6
+      with:
+        repository: MacPython/openblas-libs
+        ref: ${{ env.COMMIT }}
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Get commit
+      run: |
+        openblas_version=$(cat pyproject.toml | grep '^version' | sed -E 's/version *= *"([^"]+)"/\1/')
+        openblas_commit=v$(echo ${openblas_version} | awk -F. '{print $1"."$2"."$3}')
+        echo "OPENBLAS_COMMIT=${openblas_commit}" >> $GITHUB_ENV
+
+        echo "openblas version is: ${openblas_version}"
+        echo "openblas commit is ${openblas_commit}"
+
+    - name: Skip tests
+      run: |
+        mkdir -p patches
+        wget -qO patches/0001-fix-loongarch64-musllinux-test.patch https://github.com/loong64/openblas-libs/raw/refs/heads/patch_loong64/patches/0001-fix-loongarch64-musllinux-test.patch
+
+    - name: Setup QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Build and test wheel
+      uses: loong64/cibuildwheel@v3.3.0
+      env:
+          CIBW_ARCHS: ${{matrix.PLAT}}
+          CIBW_BUILD:  "cp39-${{ matrix.MB_ML_LIBC }}_${{matrix.PLAT}}"
+          CIBW_BUILD_VERBOSITY: 1
+          CIBW_ENVIRONMENT_LINUX: >
+            PIP_INDEX_URL=https://lpypi.loongnix.cn/loongson/pypi/+simple
+
+    - uses: actions/upload-artifact@v4 
+      with:
+        name: wheels-${{ matrix.os }}-${{ matrix.PLAT }}-${{ matrix.INTERFACE64 }}-${{ matrix.MB_ML_LIBC }}-${{ matrix.MB_ML_VER }}
+        path: dist/scipy_openblas*.whl
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: openblas-${{ matrix.os }}-${{ matrix.PLAT }}-${{ matrix.INTERFACE64 }}-${{ matrix.MB_ML_LIBC }}-${{ matrix.MB_ML_VER }}
+        path: libs/openblas*.tar.gz
+
+
+  upload:
+    needs:
+      - check-upstream-update
+      - build-wheel
+    runs-on: loongarch64-abi2.0
+    if: needs.check-upstream-update.outputs.needs_build == 'true' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      - name: Upload wheels
+        run: |
+          ls dist/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --non-interactive --disable-progress-bar --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+
+  update-commit-cache:
+    needs:
+      - check-upstream-update
+      - build-wheel
+    if: success() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Save commit to file
+      run: echo "${{ needs.check-upstream-update.outputs.latest_sha }}" > last_upstream_commit.txt
+
+    - name: Save to cache
+      uses: actions/cache@v4
+      with:
+        path: last_upstream_commit.txt
+        key: upstream-commit-sha
