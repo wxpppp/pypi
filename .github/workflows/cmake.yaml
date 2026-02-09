@@ -46,10 +46,10 @@ jobs:
 
           platform="${{ matrix.platform }}"
           url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
-          upstream_url="https://api.github.com/repos/scikit-build/cmake-python-distributions/releases/latest"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
 
           if [[ "${version}" == "latest" ]]; then
-            version="$(curl -s ${upstream_url} | jq -r .tag_name)"
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
           fi
 
           if curl -Ls ${url} | grep -q ${pkg}-${version}-.*${platform}.*loongarch64; then
@@ -93,7 +93,7 @@ jobs:
           esac
 
           sed -i 's/"cmake.define.RUN_CMAKE_TEST" = "ON"/"cmake.define.RUN_CMAKE_TEST" = "OFF"/g' pyproject.toml
-          sed -i '/s390x) GO_ARCH=s390x;;/a \        loongarch64) GO_ARCH=loong64;;' scripts/install-static-clang.sh
+          # sed -i '/s390x) GO_ARCH=s390x;;/a \        loongarch64) GO_ARCH=loong64;;' scripts/install-static-clang.sh
 
       - name: Setup QEMU
         if: ${{ env.SKIP != 'true' }}
@@ -104,10 +104,12 @@ jobs:
         uses: loong64/cibuildwheel@v3.3.1
         env:
           PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          UV_EXTRA_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
           CIBW_ARCHS: "loongarch64"
           CIBW_BUILD: "cp310-${{ matrix.platform }}_*"
           CIBW_ENVIRONMENT_PASS_LINUX: >
             PIP_INDEX_URL
+            UV_EXTRA_INDEX_URL RUNNER_ARCH
 
       - uses: actions/upload-artifact@v4
         with:
