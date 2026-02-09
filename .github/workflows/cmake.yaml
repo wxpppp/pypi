@@ -35,6 +35,9 @@ jobs:
         run: |
           pkg=cmake
 
+          skip=false
+          upload=false
+
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             version="${{ github.event.inputs.version }}"
           else
@@ -50,16 +53,24 @@ jobs:
           fi
 
           if curl -Ls ${url} | grep -q ${pkg}-${version}-.*${platform}.*loongarch64; then
-            echo "SKIP=true" >> $GITHUB_ENV
-            echo "upload=false" >> $GITHUB_OUTPUT
+            skip=true
+            upload=false
             echo "${platform} wheels already exists."
           else
-            echo "SKIP=false" >> $GITHUB_ENV
-            echo "upload=true" >> $GITHUB_OUTPUT
+            skip=false
+            upload=true
             echo "${platform} wheels not found, continue building"
           fi
 
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            skip=false
+            upload=false
+          fi
+
           echo "VERSION=${version}" >> $GITHUB_ENV
+          echo "SKIP=${skip}" >> $GITHUB_ENV
+          echo "UPLOAD=${upload}" >> $GITHUB_OUTPUT
+
 
       - name: Download source
         if: ${{ env.SKIP != 'true' }}
