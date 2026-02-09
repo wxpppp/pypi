@@ -129,7 +129,7 @@ jobs:
       uses: docker/setup-qemu-action@v3
 
     - name: Build and test wheel
-      uses: loong64/cibuildwheel@v3.3.0
+      uses: loong64/cibuildwheel@v3.3.1
       with:
         output-dir: dist
       env:
@@ -137,6 +137,9 @@ jobs:
           CIBW_BUILD:  "cp39-${{ matrix.MB_ML_LIBC }}_${{matrix.PLAT}}"
           CIBW_BUILD_VERBOSITY: 1
           CIBW_ENVIRONMENT_LINUX: >
+            CC="/opt/clang/bin/clang"
+            CXX="/opt/clang/bin/clang++"
+            LDFLAGS="-fuse-ld=lld"
             PIP_INDEX_URL=https://lpypi.loongnix.cn/loongson/pypi/+simple
 
     - uses: actions/upload-artifact@v4 
